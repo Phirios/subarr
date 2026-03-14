@@ -1,6 +1,6 @@
 """
 Main ML pipeline orchestrator.
-Diarization → Emotion Detection → Translation
+Diarization → Speaker Mapping → Emotion Detection → Translation
 """
 
 import json
@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone
 
 from diarization import Diarizer
+from speaker_mapping import map_speakers_to_subtitles
 from emotion import EmotionDetector
 from translation import Translator
 
@@ -35,11 +36,17 @@ class Pipeline:
         self._update_status(redis_client, job_id, "diarizing")
         segments = self.diarizer.process(audio_path)
 
-        # Step 2: Emotion detection
+        # Step 2: Speaker mapping — assign speakers to subtitle lines, merge orphans
+        self._update_status(redis_client, job_id, "mapping_speakers")
+        mapped_subtitles, segments = map_speakers_to_subtitles(
+            segments, subtitle_content
+        )
+
+        # Step 3: Emotion detection
         self._update_status(redis_client, job_id, "detecting_emotion")
         emotions = self.emotion_detector.process(audio_path, segments)
 
-        # Step 3: Translation
+        # Step 4: Translation — pass mapped subtitles with speaker info
         self._update_status(redis_client, job_id, "translating")
         translated = self.translator.translate(
             subtitle_content=subtitle_content,
@@ -47,6 +54,7 @@ class Pipeline:
             emotions=emotions,
             target_language=target_language,
             metadata=metadata,
+            mapped_subtitles=mapped_subtitles,
         )
 
         # Step 4: Write output

@@ -12,6 +12,7 @@ pub struct AppState {
 pub enum JobStatus {
     Queued,
     Diarizing,
+    MappingSpeakers,
     DetectingEmotion,
     Translating,
     Formatting,

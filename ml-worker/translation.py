@@ -23,13 +23,20 @@ class Translator:
         emotions: list[dict],
         target_language: str = "tr",
         metadata: dict | None = None,
+        mapped_subtitles: list[dict] | None = None,
     ) -> list[dict]:
         """
         Translates subtitle entries with context awareness.
-        Splits large SRT files into batches to avoid output token limits.
+        Uses mapped_subtitles (with speaker info) if available,
+        otherwise falls back to raw SRT content.
         """
         context_block = self._build_context(segments, emotions, metadata)
-        batches = self._split_srt(subtitle_content, max_entries=50)
+
+        if mapped_subtitles:
+            batches = self._split_entries(mapped_subtitles, max_entries=50)
+        else:
+            srt_batches = self._split_srt(subtitle_content, max_entries=50)
+            batches = [{"srt": batch} for batch in srt_batches]
 
         logger.info(f"Translating {len(batches)} batch(es)")
         all_results = []
@@ -38,19 +45,56 @@ class Translator:
                 logger.info("Rate limit pause (15s)...")
                 time.sleep(15)
             logger.info(f"Translating batch {i+1}/{len(batches)}")
-            result = self._translate_batch(batch, context_block, target_language)
+            if isinstance(batch, dict) and "srt" in batch:
+                result = self._translate_batch_srt(batch["srt"], context_block, target_language)
+            else:
+                result = self._translate_batch_mapped(batch, context_block, target_language)
             all_results.extend(result)
 
         return all_results
 
-    def _translate_batch(self, srt_batch: str, context_block: str, target_language: str) -> list[dict]:
+    def _translate_batch_mapped(self, entries: list[dict], context_block: str, target_language: str) -> list[dict]:
+        """Translate a batch of mapped subtitle entries with speaker info."""
+        # Format entries for the prompt
+        lines = []
+        for e in entries:
+            speaker = e.get("speaker") or "Unknown"
+            lines.append(f"[{self._ms_to_timestamp(e['start_ms'])} --> {self._ms_to_timestamp(e['end_ms'])}] ({speaker}) {e['text']}")
+        source_block = "\n".join(lines)
+
+        prompt = f"""You are a professional subtitle translator. Translate the following subtitles to {target_language}.
+
+{context_block}
+
+Rules:
+- Preserve the timing and structure exactly
+- Adapt tone based on who is speaking and their emotion
+- Use natural, conversational {target_language}
+- Keep translations concise to fit subtitle timing
+- Keep the speaker identifier exactly as provided
+
+Source subtitles (with speaker assignments):
+{source_block}
+
+Return a JSON array where each element has:
+- "start_ms": start time in milliseconds (preserve exact values)
+- "end_ms": end time in milliseconds (preserve exact values)
+- "text": translated text
+- "speaker": speaker identifier exactly as provided (e.g. "SPEAKER_00", or null)
+- "emotion": detected emotion (or null)
+- "color": hex color for the speaker (assign a unique consistent color per speaker, e.g. "FF4444", "44FF44", "4444FF", "FFAA00", "AA44FF")
+"""
+
+        return self._call_gemini(prompt)
+
+    def _translate_batch_srt(self, srt_batch: str, context_block: str, target_language: str) -> list[dict]:
+        """Fallback: translate raw SRT batch without speaker info."""
         prompt = f"""You are a professional subtitle translator. Translate the following subtitles to {target_language}.
 
 {context_block}
 
 Rules:
 - Preserve the timing and structure
-- Adapt tone based on the speaker's emotion and character personality
 - Use natural, conversational {target_language}
 - Keep translations concise to fit subtitle timing
 
@@ -61,11 +105,14 @@ Return a JSON array where each element has:
 - "start_ms": start time in milliseconds
 - "end_ms": end time in milliseconds
 - "text": translated text
-- "speaker": speaker identifier (from diarization, or null)
-- "emotion": detected emotion (or null)
-- "color": hex color for the speaker (assign consistent colors, e.g. "FF4444" for angry, "44AAFF" for calm)
+- "speaker": null
+- "emotion": null
+- "color": null
 """
 
+        return self._call_gemini(prompt)
+
+    def _call_gemini(self, prompt: str) -> list[dict]:
         response = self.client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
@@ -95,6 +142,22 @@ Return a JSON array where each element has:
             batches.append("\n\n".join(blocks[i:i + max_entries]))
         return batches
 
+    @staticmethod
+    def _split_entries(entries: list[dict], max_entries: int = 50) -> list[list[dict]]:
+        """Split mapped subtitle entries into batches."""
+        batches = []
+        for i in range(0, len(entries), max_entries):
+            batches.append(entries[i:i + max_entries])
+        return batches
+
+    @staticmethod
+    def _ms_to_timestamp(ms: int) -> str:
+        h = ms // 3600000
+        m = (ms % 3600000) // 60000
+        s = (ms % 60000) // 1000
+        ms_r = ms % 1000
+        return f"{h:02d}:{m:02d}:{s:02d},{ms_r:03d}"
+
     def _build_context(self, segments, emotions, metadata) -> str:
         lines = ["Context for translation:"]
 
@@ -108,7 +171,7 @@ Return a JSON array where each element has:
 
         # Summarize speakers
         speakers = set(s.get("speaker", "unknown") for s in segments)
-        lines.append(f"- {len(speakers)} speakers detected: {', '.join(speakers)}")
+        lines.append(f"- {len(speakers)} speakers detected: {', '.join(sorted(speakers))}")
 
         # Summarize emotions
         emotion_counts = {}
