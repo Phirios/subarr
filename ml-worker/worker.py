@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from config import settings
 from pipeline import Pipeline
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("subarr-worker")
 
 

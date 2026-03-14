@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     gemini_api_key: str
     pyannote_auth_token: str
     tmdb_api_key: str | None = None
+    log_level: str = "info"
 
     model_config = {"env_prefix": "SUBARR_"}
 
