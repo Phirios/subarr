@@ -4,7 +4,6 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use redis::AsyncCommands;
 use uuid::Uuid;
-use std::path::Path;
 
 use crate::models::*;
 use crate::core::formatter::{format_ass, TranslatedEntry};
@@ -33,16 +32,9 @@ async fn submit_translation(
     mut payload: Multipart,
 ) -> HttpResponse {
     let job_id = Uuid::new_v4().to_string();
-    let upload_dir = Path::new(&state.config.upload_dir).join(&job_id);
 
-    if let Err(e) = tokio::fs::create_dir_all(&upload_dir).await {
-        return HttpResponse::InternalServerError().json(serde_json::json!({
-            "error": format!("Failed to create upload dir: {}", e)
-        }));
-    }
-
-    let mut audio_path: Option<String> = None;
-    let mut subtitle_path: Option<String> = None;
+    let mut audio_bytes: Option<Vec<u8>> = None;
+    let mut subtitle_bytes: Option<Vec<u8>> = None;
     let mut target_language = "tr".to_string();
     let mut metadata: Option<JobMetadata> = None;
     let mut media_name: Option<String> = None;
@@ -52,30 +44,18 @@ async fn submit_translation(
 
         match field_name.as_str() {
             "audio" => {
-                let path = upload_dir.join("audio");
                 let mut bytes = Vec::new();
                 while let Some(Ok(chunk)) = field.next().await {
                     bytes.extend_from_slice(&chunk);
                 }
-                if let Err(e) = tokio::fs::write(&path, &bytes).await {
-                    return HttpResponse::InternalServerError().json(serde_json::json!({
-                        "error": format!("Failed to save audio: {}", e)
-                    }));
-                }
-                audio_path = Some(path.to_string_lossy().to_string());
+                audio_bytes = Some(bytes);
             }
             "subtitle" => {
-                let path = upload_dir.join("subtitle.srt");
                 let mut bytes = Vec::new();
                 while let Some(Ok(chunk)) = field.next().await {
                     bytes.extend_from_slice(&chunk);
                 }
-                if let Err(e) = tokio::fs::write(&path, &bytes).await {
-                    return HttpResponse::InternalServerError().json(serde_json::json!({
-                        "error": format!("Failed to save subtitle: {}", e)
-                    }));
-                }
-                subtitle_path = Some(path.to_string_lossy().to_string());
+                subtitle_bytes = Some(bytes);
             }
             "target_language" => {
                 let mut bytes = Vec::new();
@@ -115,11 +95,26 @@ async fn submit_translation(
         }
     }
 
-    let (Some(audio_path), Some(subtitle_path)) = (audio_path, subtitle_path) else {
+    let (Some(audio_bytes), Some(subtitle_bytes)) = (audio_bytes, subtitle_bytes) else {
         return HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Both 'audio' and 'subtitle' files are required"
         }));
     };
+
+    // Upload to MinIO
+    let audio_key = format!("{}/audio", job_id);
+    let subtitle_key = format!("{}/subtitle.srt", job_id);
+
+    if let Err(e) = state.s3_bucket.put_object(&audio_key, &audio_bytes).await {
+        return HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("Failed to upload audio to storage: {}", e)
+        }));
+    }
+    if let Err(e) = state.s3_bucket.put_object(&subtitle_key, &subtitle_bytes).await {
+        return HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": format!("Failed to upload subtitle to storage: {}", e)
+        }));
+    }
 
     let now = Utc::now();
     let job = Job {
@@ -146,11 +141,11 @@ async fn submit_translation(
     let job_json = serde_json::to_string(&job).unwrap();
     let _: () = conn.set(format!("job:{}", job_id), &job_json).await.unwrap();
 
-    // Push task to worker queue
+    // Push task to worker queue (paths are MinIO keys, worker downloads them)
     let task = WorkerTask {
         job_id: job_id.clone(),
-        audio_path,
-        subtitle_path,
+        audio_path: audio_key,
+        subtitle_path: subtitle_key,
         target_language,
         metadata,
     };
@@ -223,9 +218,10 @@ async fn download_result(
         Some(json) => {
             let job: Job = serde_json::from_str(&json).unwrap();
             match job.result_path {
-                Some(ref result_path) => {
-                    match tokio::fs::read_to_string(result_path).await {
-                        Ok(json_str) => {
+                Some(ref result_key) => {
+                    match state.s3_bucket.get_object(result_key).await {
+                        Ok(response) => {
+                            let json_str = String::from_utf8_lossy(response.bytes());
                             let entries: Vec<TranslatedEntry> = match serde_json::from_str(&json_str) {
                                 Ok(e) => e,
                                 Err(e) => {
@@ -245,7 +241,7 @@ async fn download_result(
                                 .body(ass_content)
                         }
                         Err(_) => HttpResponse::NotFound().json(serde_json::json!({
-                            "error": "Result file not found"
+                            "error": "Result file not found in storage"
                         })),
                     }
                 }

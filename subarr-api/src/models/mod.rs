@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 pub struct AppState {
     pub redis: redis::Client,
     pub config: crate::config::Config,
+    pub s3_bucket: Box<s3::Bucket>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

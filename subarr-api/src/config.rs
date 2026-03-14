@@ -11,7 +11,13 @@ pub struct Config {
     // Server
     pub host: String,
     pub port: u16,
-    pub upload_dir: String,
+
+    // MinIO/S3 storage
+    pub s3_endpoint: String,
+    pub s3_access_key: String,
+    pub s3_secret_key: String,
+    pub s3_bucket: String,
+    pub s3_region: String,
 }
 
 impl Config {
@@ -29,8 +35,16 @@ impl Config {
                 .unwrap_or_else(|_| "8080".to_string())
                 .parse()
                 .expect("SUBARR_PORT must be a valid port number"),
-            upload_dir: env::var("SUBARR_UPLOAD_DIR")
-                .unwrap_or_else(|_| "/tmp/subarr".to_string()),
+            s3_endpoint: env::var("SUBARR_S3_ENDPOINT")
+                .unwrap_or_else(|_| "http://minio-service.phirios.svc.cluster.local:9000".to_string()),
+            s3_access_key: env::var("SUBARR_S3_ACCESS_KEY")
+                .unwrap_or_else(|_| "phirios".to_string()),
+            s3_secret_key: env::var("SUBARR_S3_SECRET_KEY")
+                .unwrap_or_else(|_| "changeme".to_string()),
+            s3_bucket: env::var("SUBARR_S3_BUCKET")
+                .unwrap_or_else(|_| "subarr".to_string()),
+            s3_region: env::var("SUBARR_S3_REGION")
+                .unwrap_or_else(|_| "us-east-1".to_string()),
         }
     }
 }
