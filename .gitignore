@@ -8,8 +8,9 @@ ml-worker/tests/__pycache__/
 ml-worker/.pytest_cache/
 *.pyc
 
-# Env
+# Env & Secrets
 .env
+k8s/secret.yaml
 
 # OS
 .DS_Store
