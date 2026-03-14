@@ -19,7 +19,7 @@ class Diarizer:
             logger.info("Loading pyannote diarization model...")
             self._pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                use_auth_token=self.auth_token,
+                token=self.auth_token,
             )
             logger.info("Diarization model loaded")
 
@@ -29,7 +29,8 @@ class Diarizer:
         [{"start": 0.5, "end": 2.3, "speaker": "SPEAKER_00"}, ...]
         """
         self._load_model()
-        diarization = self._pipeline(audio_path)
+        result = self._pipeline(audio_path)
+        diarization = result.speaker_diarization
 
         segments = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
