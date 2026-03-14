@@ -24,18 +24,19 @@ class Translator:
         target_language: str = "tr",
         metadata: dict | None = None,
         mapped_subtitles: list[dict] | None = None,
+        character_map: dict[str, str] | None = None,
     ) -> list[dict]:
         """
         Translates subtitle entries with context awareness.
         Uses mapped_subtitles (with speaker info) if available,
         otherwise falls back to raw SRT content.
         """
-        context_block = self._build_context(segments, emotions, metadata)
+        context_block = self._build_context(segments, emotions, metadata, character_map)
 
         if mapped_subtitles:
-            batches = self._split_entries(mapped_subtitles, max_entries=50)
+            batches = self._split_entries(mapped_subtitles, max_entries=100)
         else:
-            srt_batches = self._split_srt(subtitle_content, max_entries=50)
+            srt_batches = self._split_srt(subtitle_content, max_entries=100)
             batches = [{"srt": batch} for batch in srt_batches]
 
         logger.info(f"Translating {len(batches)} batch(es)")
@@ -48,17 +49,19 @@ class Translator:
             if isinstance(batch, dict) and "srt" in batch:
                 result = self._translate_batch_srt(batch["srt"], context_block, target_language)
             else:
-                result = self._translate_batch_mapped(batch, context_block, target_language)
+                result = self._translate_batch_mapped(batch, context_block, target_language, character_map)
             all_results.extend(result)
 
         return all_results
 
-    def _translate_batch_mapped(self, entries: list[dict], context_block: str, target_language: str) -> list[dict]:
+    def _translate_batch_mapped(self, entries: list[dict], context_block: str, target_language: str, character_map: dict[str, str] | None = None) -> list[dict]:
         """Translate a batch of mapped subtitle entries with speaker info."""
-        # Format entries for the prompt
+        # Format entries for the prompt, using character names if available
         lines = []
         for e in entries:
             speaker = e.get("speaker") or "Unknown"
+            if character_map and speaker in character_map:
+                speaker = f"{character_map[speaker]} ({speaker})"
             lines.append(f"[{self._ms_to_timestamp(e['start_ms'])} --> {self._ms_to_timestamp(e['end_ms'])}] ({speaker}) {e['text']}")
         source_block = "\n".join(lines)
 
@@ -112,26 +115,37 @@ Return a JSON array where each element has:
 
         return self._call_gemini(prompt)
 
-    def _call_gemini(self, prompt: str) -> list[dict]:
-        response = self.client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                http_options=types.HttpOptions(timeout=300_000),
-            ),
-        )
+    def _call_gemini(self, prompt: str, max_retries: int = 3) -> list[dict]:
+        for attempt in range(max_retries):
+            try:
+                response = self.client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        http_options=types.HttpOptions(timeout=300_000),
+                    ),
+                )
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    wait = 30 * (attempt + 1)
+                    logger.warning(f"Rate limited, waiting {wait}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait)
+                    continue
+                raise
 
-        response_text = response.text
+            response_text = response.text
+            try:
+                return json.loads(response_text)
+            except json.JSONDecodeError:
+                start = response_text.find("[")
+                end = response_text.rfind("]") + 1
+                if start != -1 and end > start:
+                    return json.loads(response_text[start:end])
+                raise ValueError("Failed to parse translation response as JSON")
 
-        try:
-            return json.loads(response_text)
-        except json.JSONDecodeError:
-            start = response_text.find("[")
-            end = response_text.rfind("]") + 1
-            if start != -1 and end > start:
-                return json.loads(response_text[start:end])
-            raise ValueError("Failed to parse translation response as JSON")
+        raise RuntimeError(f"Gemini API failed after {max_retries} retries")
 
     @staticmethod
     def _split_srt(content: str, max_entries: int = 50) -> list[str]:
@@ -158,7 +172,7 @@ Return a JSON array where each element has:
         ms_r = ms % 1000
         return f"{h:02d}:{m:02d}:{s:02d},{ms_r:03d}"
 
-    def _build_context(self, segments, emotions, metadata) -> str:
+    def _build_context(self, segments, emotions, metadata, character_map=None) -> str:
         lines = ["Context for translation:"]
 
         if metadata:
@@ -172,6 +186,12 @@ Return a JSON array where each element has:
         # Summarize speakers
         speakers = set(s.get("speaker", "unknown") for s in segments)
         lines.append(f"- {len(speakers)} speakers detected: {', '.join(sorted(speakers))}")
+
+        # Character identifications
+        if character_map:
+            lines.append("- Character identifications:")
+            for speaker, character in sorted(character_map.items()):
+                lines.append(f"  {speaker} = {character}")
 
         # Summarize emotions
         emotion_counts = {}

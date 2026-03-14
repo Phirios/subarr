@@ -1,7 +1,7 @@
 """
-Speaker-to-subtitle mapping and speaker merging.
-Maps diarization segments to subtitle lines by time overlap,
-then merges orphan/fragmented speakers into existing ones.
+Speaker-to-subtitle mapping.
+Maps diarization segments to subtitle lines by time overlap.
+No merging — merge decisions are handled by post_id_merge.
 """
 
 import logging
@@ -51,23 +51,20 @@ def map_speakers_to_subtitles(
     segments: list[dict],
     srt_content: str,
     overlap_threshold: float = 0.3,
-) -> tuple[list[dict], list[dict]]:
+) -> list[dict]:
     """
     Map diarization speaker segments to subtitle entries.
+    Filter + assign only — no orphan merging.
 
     Returns:
-        - mapped_subtitles: subtitle entries with speaker assigned
-        - segments: updated segments (after merging)
+        mapped_subtitles: subtitle entries with speaker assigned
     """
     srt_entries = parse_srt_entries(srt_content)
 
     if not segments or not srt_entries:
-        return [
-            {**entry, "speaker": None} for entry in srt_entries
-        ], segments
+        return [{**entry, "speaker": None} for entry in srt_entries]
 
-    # Step 1: Assign best-matching speaker to each subtitle line
-    subtitle_speakers = []
+    mapped_subtitles = []
     for entry in srt_entries:
         best_speaker = None
         best_overlap = 0.0
@@ -80,77 +77,15 @@ def map_speakers_to_subtitles(
                 best_overlap = overlap
                 best_speaker = seg["speaker"]
 
-        subtitle_speakers.append(
-            best_speaker if best_overlap >= overlap_threshold else None
-        )
-
-    # Step 2: Find speakers that mapped to subtitles vs orphans
-    mapped_speakers = set(s for s in subtitle_speakers if s is not None)
-    all_speakers = set(seg["speaker"] for seg in segments)
-    orphan_speakers = all_speakers - mapped_speakers
-
-    if orphan_speakers:
-        logger.info(
-            f"Found {len(orphan_speakers)} orphan speaker(s): {orphan_speakers}, "
-            f"attempting merge into {mapped_speakers}"
-        )
-
-    # Step 3: Merge orphan speakers into nearest mapped speaker
-    merge_map = {}
-    for orphan in orphan_speakers:
-        orphan_segs = [s for s in segments if s["speaker"] == orphan]
-        best_target = None
-        best_distance = float("inf")
-
-        for mapped_sp in mapped_speakers:
-            mapped_segs = [s for s in segments if s["speaker"] == mapped_sp]
-            # Find minimum time distance between orphan and mapped speaker segments
-            for o_seg in orphan_segs:
-                o_mid = (o_seg["start"] + o_seg["end"]) / 2
-                for m_seg in mapped_segs:
-                    m_mid = (m_seg["start"] + m_seg["end"]) / 2
-                    dist = abs(o_mid - m_mid)
-                    if dist < best_distance:
-                        best_distance = dist
-                        best_target = mapped_sp
-
-        if best_target is not None:
-            merge_map[orphan] = best_target
-            logger.info(f"Merging {orphan} -> {best_target} (distance: {best_distance:.1f}s)")
-
-    # Step 4: Apply merge to segments
-    if merge_map:
-        for seg in segments:
-            if seg["speaker"] in merge_map:
-                seg["speaker"] = merge_map[seg["speaker"]]
-
-        # Re-assign subtitles with merged speakers
-        for i, entry in enumerate(srt_entries):
-            best_speaker = None
-            best_overlap = 0.0
-            for seg in segments:
-                overlap = compute_overlap(
-                    seg["start"], seg["end"],
-                    entry["start_ms"], entry["end_ms"],
-                )
-                if overlap > best_overlap:
-                    best_overlap = overlap
-                    best_speaker = seg["speaker"]
-            subtitle_speakers[i] = (
-                best_speaker if best_overlap >= overlap_threshold else None
-            )
-
-    # Build result
-    mapped_subtitles = []
-    for entry, speaker in zip(srt_entries, subtitle_speakers):
+        speaker = best_speaker if best_overlap >= overlap_threshold else None
         mapped_subtitles.append({**entry, "speaker": speaker})
 
-    final_speakers = set(s for s in subtitle_speakers if s is not None)
-    unassigned = sum(1 for s in subtitle_speakers if s is None)
+    assigned = sum(1 for s in mapped_subtitles if s["speaker"] is not None)
+    speakers = set(s["speaker"] for s in mapped_subtitles if s["speaker"] is not None)
     logger.info(
-        f"Speaker mapping: {len(final_speakers)} speakers, "
-        f"{len(srt_entries) - unassigned}/{len(srt_entries)} lines assigned, "
-        f"{unassigned} unassigned"
+        f"Speaker mapping: {len(speakers)} speakers, "
+        f"{assigned}/{len(srt_entries)} lines assigned, "
+        f"{len(srt_entries) - assigned} unassigned"
     )
 
-    return mapped_subtitles, segments
+    return mapped_subtitles

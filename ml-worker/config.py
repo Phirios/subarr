@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     pyannote_auth_token: str
     tmdb_api_key: str | None = None
     log_level: str = "info"
+    post_id_merge_threshold: float = 0.75
+    device: str = "auto"  # auto, cuda, mps, cpu
 
     model_config = {"env_prefix": "SUBARR_"}
 

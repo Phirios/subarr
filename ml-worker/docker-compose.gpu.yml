@@ -1,0 +1,26 @@
+services:
+  ml-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: subarr-ml-worker
+    restart: unless-stopped
+    environment:
+      - SUBARR_REDIS_URL=redis://redis.phirios.svc.cluster.local:6379/1
+      - SUBARR_GEMINI_API_KEY=${SUBARR_GEMINI_API_KEY}
+      - SUBARR_PYANNOTE_AUTH_TOKEN=${SUBARR_PYANNOTE_AUTH_TOKEN}
+      - SUBARR_TMDB_API_KEY=${SUBARR_TMDB_API_KEY}
+      - SUBARR_DEVICE=cuda
+      - SUBARR_LOG_LEVEL=info
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+
+volumes:
+  hf-cache:
