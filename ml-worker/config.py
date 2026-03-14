@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     post_id_merge_threshold: float = 0.75
     device: str = "auto"  # auto, cuda, mps, cpu
 
-    model_config = {"env_prefix": "SUBARR_"}
+    model_config = {"env_prefix": "SUBARR_", "env_file": ".env"}
 
 
 settings = Settings()
