@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: subarr
+  namespace: phirios
+spec:
+  rules:
+    - host: subarr.phirios.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: subarr-api
+                port:
+                  number: 8080

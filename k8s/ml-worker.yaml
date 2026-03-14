@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: subarr-ml-worker
+  namespace: phirios
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: subarr-ml-worker
+  template:
+    metadata:
+      labels:
+        app: subarr-ml-worker
+    spec:
+      containers:
+        - name: ml-worker
+          image: ghcr.io/phirios/subarr/ml-worker:latest
+          envFrom:
+            - configMapRef:
+                name: subarr-config
+            - secretRef:
+                name: subarr-secrets
+          volumeMounts:
+            - name: subarr-data
+              mountPath: /data/subarr
+          resources:
+            requests:
+              cpu: 2000m
+              memory: 4Gi
+            limits:
+              cpu: 8000m
+              memory: 8Gi
+      volumes:
+        - name: subarr-data
+          persistentVolumeClaim:
+            claimName: subarr-data

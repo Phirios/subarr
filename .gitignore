@@ -1,0 +1,15 @@
+# Rust
+subarr-api/target/
+
+# Python
+ml-worker/.venv/
+ml-worker/__pycache__/
+ml-worker/tests/__pycache__/
+ml-worker/.pytest_cache/
+*.pyc
+
+# Env
+.env
+
+# OS
+.DS_Store

@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: subarr-api
+  namespace: phirios
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: subarr-api
+  template:
+    metadata:
+      labels:
+        app: subarr-api
+    spec:
+      containers:
+        - name: subarr-api
+          image: ghcr.io/phirios/subarr/api:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: subarr-config
+            - secretRef:
+                name: subarr-secrets
+          volumeMounts:
+            - name: subarr-data
+              mountPath: /data/subarr
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      volumes:
+        - name: subarr-data
+          persistentVolumeClaim:
+            claimName: subarr-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: subarr-api
+  namespace: phirios
+spec:
+  selector:
+    app: subarr-api
+  ports:
+    - port: 8080
+      targetPort: 8080

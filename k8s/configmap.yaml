@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: subarr-config
+  namespace: phirios
+data:
+  SUBARR_REDIS_URL: "redis://redis:6379/0"
+  SUBARR_HOST: "0.0.0.0"
+  SUBARR_PORT: "8080"
+  SUBARR_UPLOAD_DIR: "/data/subarr"
+  SUBARR_LOG_LEVEL: "info"
