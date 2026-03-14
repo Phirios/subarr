@@ -7,6 +7,7 @@ use uuid::Uuid;
 use std::path::Path;
 
 use crate::models::*;
+use crate::core::formatter::{format_ass, TranslatedEntry};
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
@@ -44,6 +45,7 @@ async fn submit_translation(
     let mut subtitle_path: Option<String> = None;
     let mut target_language = "tr".to_string();
     let mut metadata: Option<JobMetadata> = None;
+    let mut media_name: Option<String> = None;
 
     while let Some(Ok(mut field)) = payload.next().await {
         let field_name = field.name().map(|s| s.to_string()).unwrap_or_default();
@@ -82,6 +84,13 @@ async fn submit_translation(
                 }
                 target_language = String::from_utf8_lossy(&bytes).to_string();
             }
+            "media_name" => {
+                let mut bytes = Vec::new();
+                while let Some(Ok(chunk)) = field.next().await {
+                    bytes.extend_from_slice(&chunk);
+                }
+                media_name = Some(String::from_utf8_lossy(&bytes).to_string());
+            }
             "metadata" => {
                 let mut bytes = Vec::new();
                 while let Some(Ok(chunk)) = field.next().await {
@@ -90,6 +99,19 @@ async fn submit_translation(
                 metadata = serde_json::from_slice(&bytes).ok();
             }
             _ => {}
+        }
+    }
+
+    // Merge media_name into metadata
+    if let Some(name) = media_name {
+        let meta = metadata.get_or_insert(JobMetadata {
+            tmdb_id: None,
+            season: None,
+            episode: None,
+            title: None,
+        });
+        if meta.title.is_none() {
+            meta.title = Some(name);
         }
     }
 
@@ -201,12 +223,27 @@ async fn download_result(
         Some(json) => {
             let job: Job = serde_json::from_str(&json).unwrap();
             match job.result_path {
-                Some(path) => {
-                    match tokio::fs::read(&path).await {
-                        Ok(bytes) => HttpResponse::Ok()
-                            .content_type("text/x-ssa")
-                            .append_header(("Content-Disposition", format!("attachment; filename=\"{}.ass\"", job_id)))
-                            .body(bytes),
+                Some(ref result_path) => {
+                    match tokio::fs::read_to_string(result_path).await {
+                        Ok(json_str) => {
+                            let entries: Vec<TranslatedEntry> = match serde_json::from_str(&json_str) {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    return HttpResponse::InternalServerError().json(serde_json::json!({
+                                        "error": format!("Failed to parse result: {}", e)
+                                    }));
+                                }
+                            };
+                            let title = job.metadata
+                                .as_ref()
+                                .and_then(|m| m.title.clone())
+                                .unwrap_or_else(|| job_id.clone());
+                            let ass_content = format_ass(&entries, &title);
+                            HttpResponse::Ok()
+                                .content_type("text/x-ssa; charset=utf-8")
+                                .append_header(("Content-Disposition", format!("attachment; filename=\"{}.ass\"", job_id)))
+                                .body(ass_content)
+                        }
                         Err(_) => HttpResponse::NotFound().json(serde_json::json!({
                             "error": "Result file not found"
                         })),

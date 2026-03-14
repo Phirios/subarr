@@ -37,14 +37,19 @@ pub fn format_ass(entries: &[TranslatedEntry], title: &str) -> String {
     output.push_str("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n");
     output.push_str("Style: Default,Arial,60,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,10,10,30,1\n");
 
+    // Collect unique speaker→color mappings
+    let mut speaker_colors = std::collections::BTreeMap::new();
     for entry in entries {
         if let (Some(speaker), Some(color)) = (&entry.speaker, &entry.color) {
-            let ass_color = hex_to_ass_color(color);
-            output.push_str(&format!(
-                "Style: {},Arial,60,{},&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,10,10,30,1\n",
-                speaker, ass_color
-            ));
+            speaker_colors.entry(speaker.clone()).or_insert_with(|| color.clone());
         }
+    }
+    for (speaker, color) in &speaker_colors {
+        let ass_color = hex_to_ass_color(color);
+        output.push_str(&format!(
+            "Style: {},Arial,60,{},&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,2,10,10,30,1\n",
+            speaker, ass_color
+        ));
     }
 
     output.push('\n');
