@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: ml-worker
-          image: ghcr.io/phirios/subarr/ml-worker:latest
+          image: hub.umceko.com/phirios/subarr-ml-worker:latest
           envFrom:
             - configMapRef:
                 name: subarr-config

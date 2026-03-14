@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: subarr-api
-          image: ghcr.io/phirios/subarr/api:latest
+          image: hub.umceko.com/phirios/subarr-api:latest
           ports:
             - containerPort: 8080
           envFrom:
