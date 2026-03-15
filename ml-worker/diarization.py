@@ -32,7 +32,7 @@ class Diarizer:
             logger.info(f"Loading pyannote diarization model on {self.device}...")
             self._pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                token=self.auth_token,
+                use_auth_token=self.auth_token,
             )
             self._pipeline.to(self.device)
             logger.info(f"Diarization model loaded on {self.device}")
