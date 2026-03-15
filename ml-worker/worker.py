@@ -5,6 +5,13 @@ Downloads job files from MinIO, uploads results back.
 Reconnects automatically if Redis is unreachable.
 """
 
+# Patch torchaudio for compatibility with 2.10+ (removed APIs that pyannote expects)
+import torchaudio
+if not hasattr(torchaudio, "list_audio_backends"):
+    torchaudio.list_audio_backends = lambda: ["soundfile"]
+if not hasattr(torchaudio, "AudioMetaData"):
+    torchaudio.AudioMetaData = type("AudioMetaData", (), {})
+
 import json
 import logging
 import os
