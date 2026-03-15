@@ -45,6 +45,10 @@ class TMDBClient:
         episode = metadata.get("episode")
         media_type = metadata.get("media_type")
 
+        # Infer media_type from context if not provided
+        if not media_type and (season or episode):
+            media_type = "tv"
+
         # If no tmdb_id, search by title
         if not tmdb_id and title:
             tmdb_id, media_type = self._search(title)
