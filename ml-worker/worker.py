@@ -14,10 +14,12 @@ if not hasattr(torchaudio, "AudioMetaData"):
 
 # Patch torch.load for PyTorch 2.6+ (weights_only=True by default breaks pyannote)
 import torch
-_orig_torch_load = torch.load
+import torch.serialization
+_orig_torch_load = torch.serialization.load
 def _patched_load(*args, **kwargs):
     kwargs["weights_only"] = False
     return _orig_torch_load(*args, **kwargs)
+torch.serialization.load = _patched_load
 torch.load = _patched_load
 
 import json
