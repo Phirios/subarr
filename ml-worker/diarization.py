@@ -28,11 +28,12 @@ class Diarizer:
 
     def _load_model(self):
         if self._pipeline is None:
+            import huggingface_hub
             from pyannote.audio import Pipeline
             logger.info(f"Loading pyannote diarization model on {self.device}...")
+            huggingface_hub.login(token=self.auth_token)
             self._pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                use_auth_token=self.auth_token,
             )
             self._pipeline.to(self.device)
             logger.info(f"Diarization model loaded on {self.device}")
