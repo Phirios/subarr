@@ -17,7 +17,7 @@ if not hasattr(torchaudio, "AudioMetaData"):
 import torch
 import torch.serialization
 if hasattr(torch.serialization, "_default_to_weights_only"):
-    torch.serialization._default_to_weights_only = False
+    torch.serialization._default_to_weights_only = lambda *args, **kwargs: False
 
 import json
 import logging
