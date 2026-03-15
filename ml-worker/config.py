@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     tmdb_api_key: str | None = None
     log_level: str = "info"
     post_id_merge_threshold: float = 0.75
+    diarization_threshold: float = 0.4  # lower = more speakers, higher purity
     device: str = "auto"  # auto, cuda, mps, cpu
 
     # MinIO/S3 storage

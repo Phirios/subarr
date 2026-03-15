@@ -1,10 +1,11 @@
 """
 LLM-based character identification.
-Uses Gemini to match SPEAKER_XX labels to TMDB character names.
+Uses Gemini to assign character names per subtitle line using TMDB cast + speaker hints.
 """
 
 import json
 import logging
+import time
 
 from google import genai
 from google.genai import types
@@ -22,39 +23,50 @@ class CharacterIdentifier:
         cast: list[dict],
         overlap_flags: list[dict] | None = None,
         metadata: dict | None = None,
-    ) -> dict[str, str]:
+    ) -> list[str | None]:
         """
-        Use LLM to match speaker labels to character names from TMDB cast.
+        Use LLM to assign a character name to each subtitle line.
 
-        Args:
-            mapped_subtitles: subtitle entries with speaker assigned
-            cast: TMDB cast list [{"actor": "...", "character": "..."}, ...]
-            overlap_flags: overlap detection results (optional context)
-            metadata: series/movie metadata (optional context)
+        Speaker IDs from diarization are used as hints, but the LLM can
+        override them based on dialogue content (e.g. speech patterns,
+        character names mentioned, tone).
 
         Returns:
-            Mapping of speaker label to character name.
-            e.g. {"SPEAKER_00": "Shizuka", "SPEAKER_01": "Takopi"}
-            Returns {} on error or empty cast.
+            List of character names, one per mapped_subtitle entry.
+            None for lines that couldn't be identified.
         """
         if not cast:
             logger.info("No cast data, skipping character identification")
-            return {}
+            return [None] * len(mapped_subtitles)
 
-        speakers = sorted(set(
-            s.get("speaker") for s in mapped_subtitles if s.get("speaker")
-        ))
-        if not speakers:
-            return {}
+        # Process in batches to stay within token limits
+        batch_size = 100
+        all_characters = []
+        batches = [mapped_subtitles[i:i + batch_size] for i in range(0, len(mapped_subtitles), batch_size)]
 
-        # Build speaker dialogue summary
-        speaker_lines = {sp: [] for sp in speakers}
-        for sub in mapped_subtitles:
-            sp = sub.get("speaker")
-            if sp and sp in speaker_lines:
-                speaker_lines[sp].append(sub["text"])
+        for batch_idx, batch in enumerate(batches):
+            if batch_idx > 0:
+                time.sleep(5)
+            characters = self._identify_batch(batch, cast, overlap_flags, metadata, batch_idx, len(batches))
+            all_characters.extend(characters)
 
-        prompt = self._build_prompt(speakers, speaker_lines, cast, overlap_flags, metadata)
+        # Log summary
+        from collections import Counter
+        counts = Counter(c for c in all_characters if c)
+        logger.info(f"Character identification: {len([c for c in all_characters if c])}/{len(all_characters)} lines identified, {dict(counts)}")
+
+        return all_characters
+
+    def _identify_batch(
+        self,
+        entries: list[dict],
+        cast: list[dict],
+        overlap_flags: list[dict] | None,
+        metadata: dict | None,
+        batch_idx: int,
+        total_batches: int,
+    ) -> list[str | None]:
+        prompt = self._build_prompt(entries, cast, overlap_flags, metadata)
 
         for attempt in range(3):
             try:
@@ -63,33 +75,43 @@ class CharacterIdentifier:
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
-                        http_options=types.HttpOptions(timeout=60_000),
+                        http_options=types.HttpOptions(timeout=120_000),
                     ),
                 )
-                result = json.loads(response.text)
-                if not isinstance(result, dict):
-                    logger.warning(f"Character ID returned non-dict: {type(result)}")
-                    return {}
+                if not response.text:
+                    logger.warning(f"Empty response for character ID batch {batch_idx + 1}/{total_batches}")
+                    time.sleep(5)
+                    continue
 
-                character_map = {k: v for k, v in result.items() if k in speakers and isinstance(v, str)}
-                logger.info(f"Character identification: {character_map}")
-                return character_map
+                result = json.loads(response.text)
+                if not isinstance(result, list):
+                    logger.warning(f"Character ID returned non-list: {type(result)}")
+                    return [None] * len(entries)
+
+                # Pad or trim to match entry count
+                characters = []
+                for i in range(len(entries)):
+                    if i < len(result) and result[i]:
+                        characters.append(str(result[i]))
+                    else:
+                        characters.append(None)
+                return characters
 
             except Exception as e:
                 error_str = str(e)
                 if ("429" in error_str or "RESOURCE_EXHAUSTED" in error_str) and attempt < 2:
                     wait = 30 * (attempt + 1)
                     logger.warning(f"Character ID rate limited, waiting {wait}s (attempt {attempt + 1}/3)")
-                    import time
                     time.sleep(wait)
                     continue
                 logger.error(f"Character identification failed: {e}")
-                return {}
+                return [None] * len(entries)
+
+        return [None] * len(entries)
 
     def _build_prompt(
         self,
-        speakers: list[str],
-        speaker_lines: dict[str, list[str]],
+        entries: list[dict],
         cast: list[dict],
         overlap_flags: list[dict] | None,
         metadata: dict | None,
@@ -106,22 +128,20 @@ class CharacterIdentifier:
         for c in cast:
             parts.append(f"- {c['character']} (played by {c['actor']})")
 
-        parts.append("\nSpeakers and their dialogue:")
-        for sp in speakers:
-            lines = speaker_lines[sp][:15]  # Limit to avoid token overflow
-            parts.append(f"\n{sp}:")
-            for line in lines:
-                parts.append(f'  "{line}"')
+        parts.append("\nSubtitle lines to identify (format: [speaker_hint] text):")
+        for i, e in enumerate(entries):
+            speaker = e.get("speaker", "?")
+            num = speaker.replace("SPEAKER_", "") if speaker and speaker.startswith("SPEAKER_") else "?"
+            parts.append(f"{i}. [{num}] {e['text']}")
 
-        if overlap_flags:
-            parts.append("\nNote: Some lines have overlapping speakers:")
-            for flag in overlap_flags[:5]:
-                parts.append(f"  - Line {flag['subtitle_index']}: {flag['note']}")
+        parts.append(f"""
+IMPORTANT: The speaker numbers are hints from audio diarization, but they can be WRONG.
+One speaker number might contain dialogue from multiple characters.
+Use the actual dialogue content (speech patterns, names mentioned, context) to determine
+who is really speaking each line.
 
-        parts.append("""
-Based on the dialogue content and character personalities, match each speaker to a character.
-Return a JSON object mapping speaker labels to character names.
-Example: {"SPEAKER_00": "Shizuka", "SPEAKER_01": "Takopi"}
-Only include speakers you can confidently identify. Omit uncertain ones.""")
+Return a JSON array with exactly {len(entries)} elements.
+Each element should be a character name from the cast list, or null if uncertain.
+Example: ["Takopi", "Shizuka Kuze", null, "Takopi", ...]""")
 
         return "\n".join(parts)

@@ -67,13 +67,16 @@ class Translator:
                 legend_lines.append(f"  {num}: {name}")
             char_legend = "Characters:\n" + "\n".join(legend_lines) + "\n\n"
 
-        # Format entries: [timestamp] (id, emotion) text
+        # Format entries: [timestamp] (character/id, emotion) text
         lines = []
         for e in entries:
-            speaker = e.get("speaker") or "Unknown"
-            num = speaker.replace("SPEAKER_", "") if speaker.startswith("SPEAKER_") else speaker
+            # Prefer per-line character name over speaker ID
+            char = e.get("character")
+            if not char:
+                speaker = e.get("speaker") or "Unknown"
+                char = speaker.replace("SPEAKER_", "") if speaker.startswith("SPEAKER_") else speaker
             emotion = e.get("emotion", "neutral")
-            lines.append(f"[{self._ms_to_timestamp(e['start_ms'])}] ({num}, {emotion}) {e['text']}")
+            lines.append(f"[{self._ms_to_timestamp(e['start_ms'])}] ({char}, {emotion}) {e['text']}")
         source_block = "\n".join(lines)
 
         prompt = f"""You are a professional subtitle translator. Translate the following subtitles to {target_language}.
@@ -98,13 +101,14 @@ Example output: ["Translated line 1", "Translated line 2", ...]"""
         results = []
         for i, e in enumerate(entries):
             text = translations[i] if i < len(translations) else e["text"]
-            results.append({
+            entry = {
                 "start_ms": e["start_ms"],
                 "end_ms": e["end_ms"],
                 "text": text,
-                "speaker": e.get("speaker"),
+                "speaker": e.get("character") or e.get("speaker"),
                 "emotion": e.get("emotion", "neutral"),
-            })
+            }
+            results.append(entry)
         return results
 
     def _translate_batch_srt(self, srt_batch: str, context_block: str, target_language: str) -> list[dict]:
@@ -242,8 +246,7 @@ Example output: ["Translated line 1", "Translated line 2", ...]"""
     ]
 
     def _post_process(self, results: list[dict], character_map: dict[str, str] | None) -> list[dict]:
-        """Assign consistent colors and replace speaker IDs with character names."""
-        # Build color map: assign consistent color per unique speaker
+        """Assign consistent colors per unique speaker/character."""
         unique_speakers = sorted(set(
             e.get("speaker") for e in results if e.get("speaker")
         ))
@@ -251,13 +254,10 @@ Example output: ["Translated line 1", "Translated line 2", ...]"""
         for i, speaker in enumerate(unique_speakers):
             color_map[speaker] = self.SPEAKER_COLORS[i % len(self.SPEAKER_COLORS)]
 
-        # Assign colors first, then replace speaker IDs with character names
         for entry in results:
             speaker = entry.get("speaker")
             if speaker:
                 entry["color"] = color_map.get(speaker, "FFFFFF")
-                if character_map and speaker in character_map:
-                    entry["speaker"] = character_map[speaker]
 
         return results
 

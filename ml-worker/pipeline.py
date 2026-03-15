@@ -30,7 +30,7 @@ logger = logging.getLogger("subarr-worker")
 
 class Pipeline:
     def __init__(self, settings: Settings):
-        self.diarizer = Diarizer(settings.pyannote_auth_token, device=settings.device)
+        self.diarizer = Diarizer(settings.pyannote_auth_token, device=settings.device, clustering_threshold=settings.diarization_threshold)
         self.emotion_detector = EmotionDetector(device=settings.device)
         self.translator = Translator(settings.gemini_api_key)
         self.tmdb_client = TMDBClient(settings.tmdb_api_key) if settings.tmdb_api_key else None
@@ -65,20 +65,27 @@ class Pipeline:
         self._update_status(redis_client, job_id, "detecting_emotion")
         mapped_subtitles = self.emotion_detector.process(audio_path, mapped_subtitles)
 
-        # Step 5: Character ID (LLM) — skip if no cast
-        character_map = {}
+        # Step 5: Character ID (LLM) — per-line character assignment
+        character_names = [None] * len(mapped_subtitles)
         if cast:
             self._update_status(redis_client, job_id, "identifying_characters")
-            character_map = self.character_identifier.identify(
+            character_names = self.character_identifier.identify(
                 mapped_subtitles, cast, overlap_flags, metadata
             )
 
-        # Step 6: Post-ID merge — merge unidentified via embedding similarity
-        if character_map and embeddings:
-            character_map = post_id_merge(
-                character_map, embeddings, segments, mapped_subtitles,
-                threshold=self.post_id_merge_threshold,
-            )
+        # Apply character names to mapped_subtitles
+        for i, name in enumerate(character_names):
+            if name:
+                mapped_subtitles[i]["character"] = name
+
+        # Step 6: Post-ID merge — for unidentified lines, use embedding similarity
+        # Build character_map from per-line assignments for translation context
+        character_map = {}
+        for sub in mapped_subtitles:
+            speaker = sub.get("speaker")
+            char = sub.get("character")
+            if speaker and char and speaker not in character_map:
+                character_map[speaker] = char
 
         # Step 7: Translation (LLM)
         self._update_status(redis_client, job_id, "translating")

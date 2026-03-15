@@ -21,9 +21,10 @@ def _resolve_device(device: str) -> torch.device:
 
 
 class Diarizer:
-    def __init__(self, auth_token: str, device: str = "auto"):
+    def __init__(self, auth_token: str, device: str = "auto", clustering_threshold: float = 0.4):
         self.auth_token = auth_token
         self.device = _resolve_device(device)
+        self.clustering_threshold = clustering_threshold
         self._pipeline = None
 
     def _load_model(self):
@@ -34,6 +35,14 @@ class Diarizer:
                 "pyannote/speaker-diarization-3.1",
                 token=self.auth_token,
             )
+            # Lower threshold = more speakers, higher purity per speaker
+            if hasattr(self._pipeline, "parameters"):
+                params = self._pipeline.parameters(instantiated=True)
+                if "clustering" in params and "threshold" in params["clustering"]:
+                    logger.info(f"Setting clustering threshold: {params['clustering']['threshold']} -> {self.clustering_threshold}")
+                    self._pipeline.instantiate(
+                        {**params, "clustering": {**params["clustering"], "threshold": self.clustering_threshold}}
+                    )
             self._pipeline.to(self.device)
             logger.info(f"Diarization model loaded on {self.device}")
 
