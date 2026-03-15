@@ -53,51 +53,60 @@ def test_translator_builds_context_with_character_map():
     assert "SPEAKER_00 = Shizuka" in ctx
 
 
-def test_translator_parses_json_response():
+def test_translator_mapped_batch_returns_string_array():
+    """Gemini now returns a string array, translator maps it back to full entries."""
     from translation import Translator
 
     t = Translator.__new__(Translator)
 
     mock_response = MagicMock()
-    mock_response.text = json.dumps([
-        {"start_ms": 1000, "end_ms": 4000, "text": "Merhaba", "speaker": None, "emotion": None, "color": "FFFFFF"}
-    ])
-
+    mock_response.text = json.dumps(["Merhaba", "Selam"])
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_response
     t.client = mock_client
 
-    result = t.translate("1\n00:00:01,000 --> 00:00:04,000\nHello", [], "tr", None)
+    mapped = [
+        {"start_ms": 1000, "end_ms": 4000, "text": "Hello", "speaker": "SPEAKER_00", "emotion": "happy"},
+        {"start_ms": 5000, "end_ms": 8000, "text": "Hi", "speaker": "SPEAKER_01", "emotion": "neutral"},
+    ]
+
+    result = t.translate("", [], "tr", None, mapped_subtitles=mapped)
+    assert len(result) == 2
+    assert result[0]["text"] == "Merhaba"
+    assert result[0]["speaker"] == "SPEAKER_00"
+    assert result[0]["start_ms"] == 1000
+    assert result[1]["text"] == "Selam"
+
+
+def test_translator_srt_fallback_returns_string_array():
+    """SRT fallback also uses string array from Gemini."""
+    from translation import Translator
+
+    t = Translator.__new__(Translator)
+
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(["Merhaba"])
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = mock_response
+    t.client = mock_client
+
+    srt = "1\n00:00:01,000 --> 00:00:04,000\nHello"
+    result = t.translate(srt, [], "tr", None)
     assert len(result) == 1
     assert result[0]["text"] == "Merhaba"
+    assert result[0]["start_ms"] == 1000
+    assert result[0]["end_ms"] == 4000
+    assert result[0]["speaker"] is None
 
 
-def test_translator_parses_json_with_markdown_wrapper():
+def test_translator_uses_numeric_ids_in_prompt():
+    """Prompt should use numeric IDs (00, 01) not SPEAKER_XX."""
     from translation import Translator
 
     t = Translator.__new__(Translator)
 
     mock_response = MagicMock()
-    mock_response.text = '```json\n[{"start_ms": 0, "end_ms": 1000, "text": "Test", "speaker": null, "emotion": null, "color": null}]\n```'
-
-    mock_client = MagicMock()
-    mock_client.models.generate_content.return_value = mock_response
-    t.client = mock_client
-
-    result = t.translate("1\n00:00:00,000 --> 00:00:01,000\nTest", [], "tr", None)
-    assert len(result) == 1
-    assert result[0]["text"] == "Test"
-
-
-def test_translator_uses_character_names_in_prompt():
-    from translation import Translator
-
-    t = Translator.__new__(Translator)
-
-    mock_response = MagicMock()
-    mock_response.text = json.dumps([
-        {"start_ms": 1000, "end_ms": 4000, "text": "Merhaba", "speaker": "SPEAKER_00", "emotion": "happy", "color": "FF4444"}
-    ])
+    mock_response.text = json.dumps(["Merhaba"])
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_response
     t.client = mock_client
@@ -107,10 +116,13 @@ def test_translator_uses_character_names_in_prompt():
 
     t.translate("", [], "tr", None, mapped_subtitles=mapped, character_map=character_map)
 
-    # Check the prompt sent to Gemini contains character name
     call_args = mock_client.models.generate_content.call_args
     prompt = call_args.kwargs.get("contents") or call_args[1].get("contents") or call_args[0][0]
-    assert "Shizuka" in str(prompt)
+    prompt_str = str(prompt)
+    # Should have numeric ID in character legend
+    assert "00: Shizuka" in prompt_str
+    # Should use numeric ID in lines, not SPEAKER_00
+    assert "(00, happy)" in prompt_str
 
 
 def test_translator_post_process_replaces_speaker_with_character():
@@ -131,28 +143,13 @@ def test_translator_post_process_replaces_speaker_with_character():
     assert processed[0]["color"] != processed[1]["color"]
 
 
-def test_translator_post_process_normalizes_typos():
-    from translation import Translator
-
-    t = Translator.__new__(Translator)
-
-    results = [
-        {"start_ms": 1000, "end_ms": 4000, "text": "Test", "speaker": "SPEAPER_05", "emotion": "neutral"},
-    ]
-
-    processed = t._post_process(results, None)
-    assert processed[0]["speaker"] == "SPEAKER_05"
-
-
 def test_translator_includes_emotion_in_prompt():
     from translation import Translator
 
     t = Translator.__new__(Translator)
 
     mock_response = MagicMock()
-    mock_response.text = json.dumps([
-        {"start_ms": 1000, "end_ms": 4000, "text": "Merhaba", "speaker": "SPEAKER_00", "emotion": "sad"}
-    ])
+    mock_response.text = json.dumps(["Merhaba"])
     mock_client = MagicMock()
     mock_client.models.generate_content.return_value = mock_response
     t.client = mock_client

@@ -58,63 +58,101 @@ class Translator:
 
     def _translate_batch_mapped(self, entries: list[dict], context_block: str, target_language: str, character_map: dict[str, str] | None = None) -> list[dict]:
         """Translate a batch of mapped subtitle entries with speaker info."""
-        # Format entries for the prompt, using character names and emotion if available
+        # Build character legend: numeric ID -> name
+        char_legend = ""
+        if character_map:
+            legend_lines = []
+            for speaker, name in sorted(character_map.items()):
+                num = speaker.replace("SPEAKER_", "")
+                legend_lines.append(f"  {num}: {name}")
+            char_legend = "Characters:\n" + "\n".join(legend_lines) + "\n\n"
+
+        # Format entries: [timestamp] (id, emotion) text
         lines = []
         for e in entries:
             speaker = e.get("speaker") or "Unknown"
-            if character_map and speaker in character_map:
-                speaker = f"{character_map[speaker]} ({speaker})"
+            num = speaker.replace("SPEAKER_", "") if speaker.startswith("SPEAKER_") else speaker
             emotion = e.get("emotion", "neutral")
-            lines.append(f"[{self._ms_to_timestamp(e['start_ms'])} --> {self._ms_to_timestamp(e['end_ms'])}] ({speaker}, {emotion}) {e['text']}")
+            lines.append(f"[{self._ms_to_timestamp(e['start_ms'])}] ({num}, {emotion}) {e['text']}")
         source_block = "\n".join(lines)
 
         prompt = f"""You are a professional subtitle translator. Translate the following subtitles to {target_language}.
 
 {context_block}
 
-Rules:
-- Preserve the timing and structure exactly
-- Adapt tone and word choice based on who is speaking and their detected emotion (shown after speaker name)
-- Use natural, conversational {target_language}
-- Keep translations concise to fit subtitle timing
-- Keep the speaker identifier exactly as provided
-
-Source subtitles (format: [timestamp] (speaker, emotion) text):
+{char_legend}Lines:
 {source_block}
 
-Return a JSON array where each element has:
-- "start_ms": start time in milliseconds (preserve exact values)
-- "end_ms": end time in milliseconds (preserve exact values)
-- "text": translated text
-- "speaker": the SPEAKER_XX identifier only (e.g. "SPEAKER_00"), do NOT include character names
-- "emotion": preserve the emotion label from the source exactly as provided
-"""
+Rules:
+- Translate each line to natural, conversational {target_language}
+- Adapt tone based on who is speaking (see character legend) and their emotion
+- Keep translations concise to fit subtitle timing
+- Return ONLY a JSON array of translated strings, one per input line, in the same order
+- The array must have exactly {len(entries)} elements
 
-        return self._call_gemini(prompt)
+Example output: ["Translated line 1", "Translated line 2", ...]"""
+
+        translations = self._call_gemini(prompt)
+
+        # Map translations back to full entries
+        results = []
+        for i, e in enumerate(entries):
+            text = translations[i] if i < len(translations) else e["text"]
+            results.append({
+                "start_ms": e["start_ms"],
+                "end_ms": e["end_ms"],
+                "text": text,
+                "speaker": e.get("speaker"),
+                "emotion": e.get("emotion", "neutral"),
+            })
+        return results
 
     def _translate_batch_srt(self, srt_batch: str, context_block: str, target_language: str) -> list[dict]:
         """Fallback: translate raw SRT batch without speaker info."""
+        # Parse SRT blocks to count entries
+        blocks = [b.strip() for b in srt_batch.strip().split("\n\n") if b.strip()]
+
         prompt = f"""You are a professional subtitle translator. Translate the following subtitles to {target_language}.
 
 {context_block}
 
 Rules:
-- Preserve the timing and structure
-- Use natural, conversational {target_language}
+- Translate each subtitle block to natural, conversational {target_language}
 - Keep translations concise to fit subtitle timing
+- Return ONLY a JSON array of translated strings, one per subtitle block, in the same order
+- The array must have exactly {len(blocks)} elements
 
 Source subtitles (SRT format):
 {srt_batch}
 
-Return a JSON array where each element has:
-- "start_ms": start time in milliseconds
-- "end_ms": end time in milliseconds
-- "text": translated text
-- "speaker": null
-- "emotion": detected emotion based on context (e.g. "happy", "sad", "angry", "neutral"), or null
-"""
+Example output: ["Translated line 1", "Translated line 2", ...]"""
 
-        return self._call_gemini(prompt)
+        translations = self._call_gemini(prompt)
+
+        # Parse SRT blocks and map translations back
+        import re
+        results = []
+        for i, block in enumerate(blocks):
+            block_lines = block.strip().split("\n")
+            if len(block_lines) < 2:
+                continue
+            time_line = block_lines[1] if len(block_lines) > 1 else ""
+            time_match = re.match(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})", time_line)
+            if time_match:
+                g = time_match.groups()
+                start_ms = int(g[0])*3600000 + int(g[1])*60000 + int(g[2])*1000 + int(g[3])
+                end_ms = int(g[4])*3600000 + int(g[5])*60000 + int(g[6])*1000 + int(g[7])
+            else:
+                start_ms, end_ms = 0, 0
+            text = translations[i] if i < len(translations) else "\n".join(block_lines[2:])
+            results.append({
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "text": text,
+                "speaker": None,
+                "emotion": None,
+            })
+        return results
 
     def _call_gemini(self, prompt: str, max_retries: int = 3) -> list[dict]:
         for attempt in range(max_retries):
@@ -200,25 +238,7 @@ Return a JSON array where each element has:
     ]
 
     def _post_process(self, results: list[dict], character_map: dict[str, str] | None) -> list[dict]:
-        """Replace speaker IDs with character names and assign consistent colors."""
-        import re
-
-        # Collect unique speakers and normalize typos (e.g. SPEAPER_05 -> SPEAKER_05)
-        speaker_pattern = re.compile(r"^SPEA[A-Z]*_(\d+)$")
-        speaker_normalize = {}
-        for entry in results:
-            speaker = entry.get("speaker")
-            if speaker and speaker_pattern.match(speaker):
-                num = speaker_pattern.match(speaker).group(1)
-                canonical = f"SPEAKER_{num}"
-                speaker_normalize[speaker] = canonical
-
-        # Apply normalization
-        for entry in results:
-            speaker = entry.get("speaker")
-            if speaker and speaker in speaker_normalize:
-                entry["speaker"] = speaker_normalize[speaker]
-
+        """Assign consistent colors and replace speaker IDs with character names."""
         # Build color map: assign consistent color per unique speaker
         unique_speakers = sorted(set(
             e.get("speaker") for e in results if e.get("speaker")
@@ -227,7 +247,7 @@ Return a JSON array where each element has:
         for i, speaker in enumerate(unique_speakers):
             color_map[speaker] = self.SPEAKER_COLORS[i % len(self.SPEAKER_COLORS)]
 
-        # Replace speaker IDs with character names if available
+        # Assign colors first, then replace speaker IDs with character names
         for entry in results:
             speaker = entry.get("speaker")
             if speaker:
