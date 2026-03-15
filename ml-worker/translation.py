@@ -175,9 +175,13 @@ Example output: ["Translated line 1", "Translated line 2", ...]"""
                 raise
 
             response_text = response.text
+            if not response_text:
+                logger.warning(f"Empty response from Gemini (attempt {attempt + 1}/{max_retries})")
+                time.sleep(5)
+                continue
             try:
                 return json.loads(response_text)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, TypeError):
                 # Try extracting JSON array
                 start = response_text.find("[")
                 end = response_text.rfind("]") + 1
