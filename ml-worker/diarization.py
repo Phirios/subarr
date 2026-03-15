@@ -32,7 +32,7 @@ class Diarizer:
             logger.info(f"Loading pyannote diarization model on {self.device}...")
             self._pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
-                use_auth_token=self.auth_token,
+                token=self.auth_token,
             )
             self._pipeline.to(self.device)
             logger.info(f"Diarization model loaded on {self.device}")
@@ -49,8 +49,14 @@ class Diarizer:
         }
         """
         self._load_model()
+        # pyannote 4.x returns Annotation directly, 3.x returns wrapper
         result = self._pipeline(audio_path)
-        diarization = result.speaker_diarization
+
+        # Handle both pyannote 3.x (wrapper) and 4.x (Annotation directly)
+        if hasattr(result, "speaker_diarization"):
+            diarization = result.speaker_diarization
+        else:
+            diarization = result
 
         segments = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
@@ -63,7 +69,7 @@ class Diarizer:
         # Extract speaker embeddings for similarity analysis
         speakers = sorted(set(s["speaker"] for s in segments))
         embeddings = None
-        if result.speaker_embeddings is not None:
+        if hasattr(result, "speaker_embeddings") and result.speaker_embeddings is not None:
             embeddings = {
                 "vectors": result.speaker_embeddings,
                 "speakers": speakers,
