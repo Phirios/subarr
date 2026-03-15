@@ -12,6 +12,7 @@ if not hasattr(torchaudio, "list_audio_backends"):
 if not hasattr(torchaudio, "AudioMetaData"):
     torchaudio.AudioMetaData = type("AudioMetaData", (), {})
 
+
 # Patch torch.load for PyTorch 2.6+ (weights_only=True by default breaks pyannote)
 import torch
 import torch.serialization
