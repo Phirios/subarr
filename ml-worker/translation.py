@@ -139,10 +139,22 @@ Return a JSON array where each element has:
             try:
                 return json.loads(response_text)
             except json.JSONDecodeError:
+                # Try extracting JSON array
                 start = response_text.find("[")
                 end = response_text.rfind("]") + 1
                 if start != -1 and end > start:
-                    return json.loads(response_text[start:end])
+                    text = response_text[start:end]
+                    try:
+                        return json.loads(text)
+                    except json.JSONDecodeError:
+                        pass
+                    # Fix invalid \escapes from LLM (e.g. \n inside already-quoted strings)
+                    import re
+                    text = re.sub(r'(?<!\\)\\(?!["\\/bfnrtu])', r'\\\\', text)
+                    try:
+                        return json.loads(text)
+                    except json.JSONDecodeError:
+                        pass
                 raise ValueError("Failed to parse translation response as JSON")
 
         raise RuntimeError(f"Gemini API failed after {max_retries} retries")
