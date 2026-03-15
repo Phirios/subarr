@@ -83,7 +83,8 @@ def main():
                 logger.info(f"Job {job_id} completed")
 
             except Exception as e:
-                logger.error(f"Job {job_id} failed: {e}")
+                import traceback
+                logger.error(f"Job {job_id} failed: {e}\n{traceback.format_exc()}")
                 try:
                     job = json.loads(r.get(f"job:{job_id}"))
                     job["status"] = "failed"
