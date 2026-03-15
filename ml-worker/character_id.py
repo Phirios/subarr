@@ -91,7 +91,7 @@ class CharacterIdentifier:
                 # Pad or trim to match entry count
                 characters = []
                 for i in range(len(entries)):
-                    if i < len(result) and result[i]:
+                    if i < len(result) and result[i] and str(result[i]).lower() != "null":
                         characters.append(str(result[i]))
                     else:
                         characters.append(None)
