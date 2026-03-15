@@ -20,7 +20,6 @@ class Translator:
         self,
         subtitle_content: str,
         segments: list[dict],
-        emotions: list[dict],
         target_language: str = "tr",
         metadata: dict | None = None,
         mapped_subtitles: list[dict] | None = None,
@@ -28,10 +27,10 @@ class Translator:
     ) -> list[dict]:
         """
         Translates subtitle entries with context awareness.
-        Uses mapped_subtitles (with speaker info) if available,
+        Uses mapped_subtitles (with speaker info and emotion) if available,
         otherwise falls back to raw SRT content.
         """
-        context_block = self._build_context(segments, emotions, metadata, character_map)
+        context_block = self._build_context(segments, metadata, character_map, mapped_subtitles)
 
         if mapped_subtitles:
             batches = self._split_entries(mapped_subtitles, max_entries=100)
@@ -52,17 +51,21 @@ class Translator:
                 result = self._translate_batch_mapped(batch, context_block, target_language, character_map)
             all_results.extend(result)
 
+        # Post-process: replace speaker IDs with character names and assign consistent colors
+        all_results = self._post_process(all_results, character_map)
+
         return all_results
 
     def _translate_batch_mapped(self, entries: list[dict], context_block: str, target_language: str, character_map: dict[str, str] | None = None) -> list[dict]:
         """Translate a batch of mapped subtitle entries with speaker info."""
-        # Format entries for the prompt, using character names if available
+        # Format entries for the prompt, using character names and emotion if available
         lines = []
         for e in entries:
             speaker = e.get("speaker") or "Unknown"
             if character_map and speaker in character_map:
                 speaker = f"{character_map[speaker]} ({speaker})"
-            lines.append(f"[{self._ms_to_timestamp(e['start_ms'])} --> {self._ms_to_timestamp(e['end_ms'])}] ({speaker}) {e['text']}")
+            emotion = e.get("emotion", "neutral")
+            lines.append(f"[{self._ms_to_timestamp(e['start_ms'])} --> {self._ms_to_timestamp(e['end_ms'])}] ({speaker}, {emotion}) {e['text']}")
         source_block = "\n".join(lines)
 
         prompt = f"""You are a professional subtitle translator. Translate the following subtitles to {target_language}.
@@ -71,21 +74,20 @@ class Translator:
 
 Rules:
 - Preserve the timing and structure exactly
-- Adapt tone based on who is speaking and their emotion
+- Adapt tone and word choice based on who is speaking and their detected emotion (shown after speaker name)
 - Use natural, conversational {target_language}
 - Keep translations concise to fit subtitle timing
 - Keep the speaker identifier exactly as provided
 
-Source subtitles (with speaker assignments):
+Source subtitles (format: [timestamp] (speaker, emotion) text):
 {source_block}
 
 Return a JSON array where each element has:
 - "start_ms": start time in milliseconds (preserve exact values)
 - "end_ms": end time in milliseconds (preserve exact values)
 - "text": translated text
-- "speaker": speaker identifier exactly as provided (e.g. "SPEAKER_00", or null)
-- "emotion": detected emotion (or null)
-- "color": hex color for the speaker (assign a unique consistent color per speaker, e.g. "FF4444", "44FF44", "4444FF", "FFAA00", "AA44FF")
+- "speaker": the SPEAKER_XX identifier only (e.g. "SPEAKER_00"), do NOT include character names
+- "emotion": preserve the emotion label from the source exactly as provided
 """
 
         return self._call_gemini(prompt)
@@ -109,8 +111,7 @@ Return a JSON array where each element has:
 - "end_ms": end time in milliseconds
 - "text": translated text
 - "speaker": null
-- "emotion": null
-- "color": null
+- "emotion": detected emotion based on context (e.g. "happy", "sad", "angry", "neutral"), or null
 """
 
         return self._call_gemini(prompt)
@@ -184,7 +185,59 @@ Return a JSON array where each element has:
         ms_r = ms % 1000
         return f"{h:02d}:{m:02d}:{s:02d},{ms_r:03d}"
 
-    def _build_context(self, segments, emotions, metadata, character_map=None) -> str:
+    # Consistent color palette for speakers
+    SPEAKER_COLORS = [
+        "FF4444",  # red
+        "4488FF",  # blue
+        "44DD44",  # green
+        "FFAA00",  # orange
+        "AA44FF",  # purple
+        "FF44AA",  # pink
+        "44FFDD",  # cyan
+        "FFDD44",  # yellow
+        "8888FF",  # light blue
+        "FF8844",  # coral
+    ]
+
+    def _post_process(self, results: list[dict], character_map: dict[str, str] | None) -> list[dict]:
+        """Replace speaker IDs with character names and assign consistent colors."""
+        import re
+
+        # Collect unique speakers and normalize typos (e.g. SPEAPER_05 -> SPEAKER_05)
+        speaker_pattern = re.compile(r"^SPEA[A-Z]*_(\d+)$")
+        speaker_normalize = {}
+        for entry in results:
+            speaker = entry.get("speaker")
+            if speaker and speaker_pattern.match(speaker):
+                num = speaker_pattern.match(speaker).group(1)
+                canonical = f"SPEAKER_{num}"
+                speaker_normalize[speaker] = canonical
+
+        # Apply normalization
+        for entry in results:
+            speaker = entry.get("speaker")
+            if speaker and speaker in speaker_normalize:
+                entry["speaker"] = speaker_normalize[speaker]
+
+        # Build color map: assign consistent color per unique speaker
+        unique_speakers = sorted(set(
+            e.get("speaker") for e in results if e.get("speaker")
+        ))
+        color_map = {}
+        for i, speaker in enumerate(unique_speakers):
+            color_map[speaker] = self.SPEAKER_COLORS[i % len(self.SPEAKER_COLORS)]
+
+        # Replace speaker IDs with character names if available
+        for entry in results:
+            speaker = entry.get("speaker")
+            if speaker:
+                entry["color"] = color_map.get(speaker, "FFFFFF")
+                if character_map and speaker in character_map:
+                    entry["speaker"] = character_map[speaker]
+
+        return results
+
+    def _build_context(self, segments, metadata, character_map=None, mapped_subtitles=None) -> str:
         lines = ["Context for translation:"]
 
         if metadata:
@@ -205,11 +258,12 @@ Return a JSON array where each element has:
             for speaker, character in sorted(character_map.items()):
                 lines.append(f"  {speaker} = {character}")
 
-        # Summarize emotions
-        emotion_counts = {}
-        for e in emotions:
-            em = e.get("emotion", "neutral")
-            emotion_counts[em] = emotion_counts.get(em, 0) + 1
-        lines.append(f"- Emotion distribution: {emotion_counts}")
+        # Summarize emotions from mapped subtitles
+        if mapped_subtitles:
+            emotion_counts = {}
+            for e in mapped_subtitles:
+                em = e.get("emotion", "neutral")
+                emotion_counts[em] = emotion_counts.get(em, 0) + 1
+            lines.append(f"- Emotion distribution: {emotion_counts}")
 
         return "\n".join(lines)

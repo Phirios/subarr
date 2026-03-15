@@ -31,7 +31,7 @@ logger = logging.getLogger("subarr-worker")
 class Pipeline:
     def __init__(self, settings: Settings):
         self.diarizer = Diarizer(settings.pyannote_auth_token, device=settings.device)
-        self.emotion_detector = EmotionDetector()
+        self.emotion_detector = EmotionDetector(device=settings.device)
         self.translator = Translator(settings.gemini_api_key)
         self.tmdb_client = TMDBClient(settings.tmdb_api_key) if settings.tmdb_api_key else None
         self.character_identifier = CharacterIdentifier(settings.gemini_api_key)
@@ -61,9 +61,9 @@ class Pipeline:
         # Step 3: Overlap detection
         overlap_flags = detect_overlaps(segments, mapped_subtitles)
 
-        # Step 4: Emotion detection
+        # Step 4: Emotion detection (on mapped subtitles — only dialogue audio)
         self._update_status(redis_client, job_id, "detecting_emotion")
-        emotions = self.emotion_detector.process(audio_path, segments)
+        mapped_subtitles = self.emotion_detector.process(audio_path, mapped_subtitles)
 
         # Step 5: Character ID (LLM) — skip if no cast
         character_map = {}
@@ -85,7 +85,6 @@ class Pipeline:
         translated = self.translator.translate(
             subtitle_content=subtitle_content,
             segments=segments,
-            emotions=emotions,
             target_language=target_language,
             metadata=metadata,
             mapped_subtitles=mapped_subtitles,

@@ -75,8 +75,9 @@ def test_pipeline_updates_status(mock_settings, sample_task):
             "segments": [{"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"}],
             "embeddings": None,
         }
-        MockEmotion.return_value.process.return_value = [
-            {"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00", "emotion": "neutral"}
+        # EmotionDetector.process now receives mapped_subtitles and returns them with emotion
+        MockEmotion.return_value.process.side_effect = lambda audio, subs: [
+            {**s, "emotion": "neutral"} for s in subs
         ]
         MockTranslator.return_value.translate.return_value = [
             {"start_ms": 1000, "end_ms": 4000, "text": "Merhaba", "speaker": "SPEAKER_00", "emotion": "neutral", "color": "FFFFFF"}
@@ -111,7 +112,9 @@ def test_pipeline_writes_output(mock_settings, sample_task):
             "segments": [],
             "embeddings": None,
         }
-        MockEmotion.return_value.process.return_value = []
+        MockEmotion.return_value.process.side_effect = lambda audio, subs: [
+            {**s, "emotion": "neutral"} for s in subs
+        ]
         MockTranslator.return_value.translate.return_value = translated_data
         MockTMDB.return_value.get_characters.return_value = []
         MockCharId.return_value.identify.return_value = {}
@@ -146,8 +149,8 @@ def test_pipeline_with_character_identification(monkeypatch, sample_task):
             "segments": [{"start": 0.0, "end": 4.0, "speaker": "SPEAKER_00"}],
             "embeddings": None,
         }
-        MockEmotion.return_value.process.return_value = [
-            {"start": 0.0, "end": 4.0, "speaker": "SPEAKER_00", "emotion": "neutral"}
+        MockEmotion.return_value.process.side_effect = lambda audio, subs: [
+            {**s, "emotion": "neutral"} for s in subs
         ]
         MockTranslator.return_value.translate.return_value = [
             {"start_ms": 1000, "end_ms": 4000, "text": "Merhaba", "speaker": "SPEAKER_00", "emotion": "neutral", "color": "FFFFFF"}
@@ -185,8 +188,8 @@ def test_pipeline_graceful_no_tmdb_key(monkeypatch, sample_task):
             "segments": [{"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"}],
             "embeddings": None,
         }
-        MockEmotion.return_value.process.return_value = [
-            {"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00", "emotion": "neutral"}
+        MockEmotion.return_value.process.side_effect = lambda audio, subs: [
+            {**s, "emotion": "neutral"} for s in subs
         ]
         MockTranslator.return_value.translate.return_value = [
             {"start_ms": 1000, "end_ms": 4000, "text": "Merhaba", "speaker": "SPEAKER_00", "emotion": "neutral", "color": "FFFFFF"}
