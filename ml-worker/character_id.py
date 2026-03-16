@@ -23,6 +23,7 @@ class CharacterIdentifier:
         cast: list[dict],
         overlap_flags: list[dict] | None = None,
         metadata: dict | None = None,
+        tmdb_context: dict | None = None,
     ) -> list[str | None]:
         """
         Use LLM to assign a character name to each subtitle line.
@@ -47,7 +48,16 @@ class CharacterIdentifier:
         for batch_idx, batch in enumerate(batches):
             if batch_idx > 0:
                 time.sleep(5)
-            characters = self._identify_batch(batch, cast, overlap_flags, metadata, batch_idx, len(batches))
+            # Slice overlap_flags to match batch indices (convert global → local)
+            batch_overlap = None
+            if overlap_flags:
+                offset = batch_idx * batch_size
+                batch_overlap = [
+                    {**f, "index": f["index"] - offset}
+                    for f in overlap_flags
+                    if offset <= f.get("index", -1) < offset + len(batch)
+                ]
+            characters = self._identify_batch(batch, cast, batch_overlap, metadata, tmdb_context, batch_idx, len(batches))
             all_characters.extend(characters)
 
         # Log summary
@@ -63,10 +73,11 @@ class CharacterIdentifier:
         cast: list[dict],
         overlap_flags: list[dict] | None,
         metadata: dict | None,
+        tmdb_context: dict | None,
         batch_idx: int,
         total_batches: int,
     ) -> list[str | None]:
-        prompt = self._build_prompt(entries, cast, overlap_flags, metadata)
+        prompt = self._build_prompt(entries, cast, overlap_flags, metadata, tmdb_context)
 
         for attempt in range(3):
             try:
@@ -115,6 +126,7 @@ class CharacterIdentifier:
         cast: list[dict],
         overlap_flags: list[dict] | None,
         metadata: dict | None,
+        tmdb_context: dict | None = None,
     ) -> str:
         parts = ["You are an expert at identifying anime/TV characters from their dialogue."]
 
@@ -124,15 +136,34 @@ class CharacterIdentifier:
             if metadata.get("season") and metadata.get("episode"):
                 parts.append(f"Season {metadata['season']}, Episode {metadata['episode']}")
 
+        if tmdb_context:
+            if tmdb_context.get("show_genres"):
+                parts.append(f"Genres: {', '.join(tmdb_context['show_genres'])}")
+            if tmdb_context.get("show_overview"):
+                parts.append(f"\nShow synopsis: {tmdb_context['show_overview']}")
+            if tmdb_context.get("episode_name"):
+                parts.append(f"\nEpisode: {tmdb_context['episode_name']}")
+            if tmdb_context.get("episode_overview"):
+                parts.append(f"Episode synopsis: {tmdb_context['episode_overview']}")
+
         parts.append("\nKnown cast (from TMDB):")
         for c in cast:
             parts.append(f"- {c['character']} (played by {c['actor']})")
+
+        if overlap_flags:
+            overlap_indices = {f.get("index") for f in overlap_flags if f.get("overlap")}
+            if overlap_indices:
+                parts.append(f"\nNote: Lines marked with [OVL] have overlapping speech (multiple people talking simultaneously). "
+                             "Be extra careful identifying who is speaking these lines.")
+        else:
+            overlap_indices = set()
 
         parts.append("\nSubtitle lines to identify (format: [speaker_hint] text):")
         for i, e in enumerate(entries):
             speaker = e.get("speaker", "?")
             num = speaker.replace("SPEAKER_", "") if speaker and speaker.startswith("SPEAKER_") else "?"
-            parts.append(f"{i}. [{num}] {e['text']}")
+            ovl = " [OVL]" if i in overlap_indices else ""
+            parts.append(f"{i}. [{num}]{ovl} {e['text']}")
 
         parts.append(f"""
 IMPORTANT: The speaker numbers are hints from audio diarization, but they can be WRONG.

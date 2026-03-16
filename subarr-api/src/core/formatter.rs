@@ -62,10 +62,11 @@ pub fn format_ass(entries: &[TranslatedEntry], title: &str) -> String {
         let start = ms_to_ass_time(entry.start_ms);
         let end = ms_to_ass_time(entry.end_ms);
         let style = entry.speaker.as_deref().unwrap_or("Default");
+        let text = html_to_ass_tags(&entry.text);
 
         output.push_str(&format!(
             "Dialogue: 0,{},{},{},{},0,0,0,,{}\n",
-            start, end, style, style, entry.text
+            start, end, style, style, text
         ));
     }
 
@@ -78,6 +79,15 @@ fn ms_to_ass_time(ms: u64) -> String {
     let s = (ms % 60000) / 1000;
     let cs = (ms % 1000) / 10;
     format!("{}:{:02}:{:02}.{:02}", h, m, s, cs)
+}
+
+fn html_to_ass_tags(text: &str) -> String {
+    text.replace("<i>", "{\\i1}")
+        .replace("</i>", "{\\i0}")
+        .replace("<b>", "{\\b1}")
+        .replace("</b>", "{\\b0}")
+        .replace("<u>", "{\\u1}")
+        .replace("</u>", "{\\u0}")
 }
 
 fn hex_to_ass_color(hex: &str) -> String {
@@ -188,5 +198,33 @@ mod tests {
         let ass = format_ass(&entries, "Timing Test");
         assert!(ass.contains("1:01:01.50"));
         assert!(ass.contains("1:01:05.00"));
+    }
+
+    #[test]
+    fn test_html_to_ass_tags() {
+        assert_eq!(html_to_ass_tags("<i>italic</i>"), "{\\i1}italic{\\i0}");
+        assert_eq!(html_to_ass_tags("<b>bold</b>"), "{\\b1}bold{\\b0}");
+        assert_eq!(html_to_ass_tags("<u>underline</u>"), "{\\u1}underline{\\u0}");
+        assert_eq!(html_to_ass_tags("no tags"), "no tags");
+        assert_eq!(
+            html_to_ass_tags("<i>mixed</i> and <b>tags</b>"),
+            "{\\i1}mixed{\\i0} and {\\b1}tags{\\b0}"
+        );
+    }
+
+    #[test]
+    fn test_format_ass_converts_html_tags() {
+        let entries = vec![TranslatedEntry {
+            start_ms: 0,
+            end_ms: 1000,
+            text: "<i>Whispered</i> words".to_string(),
+            speaker: None,
+            emotion: None,
+            color: None,
+        }];
+
+        let ass = format_ass(&entries, "HTML Test");
+        assert!(ass.contains("{\\i1}Whispered{\\i0} words"));
+        assert!(!ass.contains("<i>"));
     }
 }

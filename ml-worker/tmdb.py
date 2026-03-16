@@ -84,6 +84,54 @@ class TMDBClient:
         # Movie
         return self._get_movie_credits(tmdb_id)
 
+    def get_context(self, metadata: dict) -> dict:
+        """
+        Fetch show/episode context from TMDB for richer prompts.
+
+        Returns:
+            {
+                "show_overview": str,
+                "show_genres": [str],
+                "episode_name": str | None,
+                "episode_overview": str | None,
+            }
+        """
+        title = metadata.get("title")
+        tmdb_id = metadata.get("tmdb_id")
+        season = metadata.get("season")
+        episode = metadata.get("episode")
+        media_type = metadata.get("media_type")
+
+        if not media_type and (season or episode):
+            media_type = "tv"
+
+        if not tmdb_id and title:
+            tmdb_id, media_type = self._search(title)
+
+        if not tmdb_id:
+            return {}
+
+        context = {}
+
+        if media_type == "tv":
+            show = self._get(f"/tv/{tmdb_id}")
+            if show:
+                context["show_overview"] = show.get("overview", "")
+                context["show_genres"] = [g["name"] for g in show.get("genres", [])]
+
+            if season and episode:
+                ep = self._get(f"/tv/{tmdb_id}/season/{season}/episode/{episode}")
+                if ep:
+                    context["episode_name"] = ep.get("name")
+                    context["episode_overview"] = ep.get("overview")
+        else:
+            movie = self._get(f"/movie/{tmdb_id}")
+            if movie:
+                context["show_overview"] = movie.get("overview", "")
+                context["show_genres"] = [g["name"] for g in movie.get("genres", [])]
+
+        return context
+
     def _search(self, query: str) -> tuple[int | None, str | None]:
         data = self._get("/search/multi", {"query": query})
         if not data:

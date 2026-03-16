@@ -24,13 +24,14 @@ class Translator:
         metadata: dict | None = None,
         mapped_subtitles: list[dict] | None = None,
         character_map: dict[str, str] | None = None,
+        tmdb_context: dict | None = None,
     ) -> list[dict]:
         """
         Translates subtitle entries with context awareness.
         Uses mapped_subtitles (with speaker info and emotion) if available,
         otherwise falls back to raw SRT content.
         """
-        context_block = self._build_context(segments, metadata, character_map, mapped_subtitles)
+        context_block = self._build_context(segments, metadata, character_map, mapped_subtitles, tmdb_context)
 
         if mapped_subtitles:
             batches = self._split_entries(mapped_subtitles, max_entries=100)
@@ -261,7 +262,7 @@ Example output: ["Translated line 1", "Translated line 2", ...]"""
 
         return results
 
-    def _build_context(self, segments, metadata, character_map=None, mapped_subtitles=None) -> str:
+    def _build_context(self, segments, metadata, character_map=None, mapped_subtitles=None, tmdb_context=None) -> str:
         lines = ["Context for translation:"]
 
         if metadata:
@@ -269,8 +270,17 @@ Example output: ["Translated line 1", "Translated line 2", ...]"""
                 lines.append(f"- Title: {metadata['title']}")
             if metadata.get("season") and metadata.get("episode"):
                 lines.append(f"- Season {metadata['season']}, Episode {metadata['episode']}")
-            if metadata.get("tmdb_id"):
-                lines.append(f"- TMDB ID: {metadata['tmdb_id']}")
+
+        # Show/episode context from TMDB
+        if tmdb_context:
+            if tmdb_context.get("show_genres"):
+                lines.append(f"- Genres: {', '.join(tmdb_context['show_genres'])}")
+            if tmdb_context.get("show_overview"):
+                lines.append(f"- Show synopsis: {tmdb_context['show_overview']}")
+            if tmdb_context.get("episode_name"):
+                lines.append(f"- Episode: {tmdb_context['episode_name']}")
+            if tmdb_context.get("episode_overview"):
+                lines.append(f"- Episode synopsis: {tmdb_context['episode_overview']}")
 
         # Summarize speakers
         speakers = set(s.get("speaker", "unknown") for s in segments)

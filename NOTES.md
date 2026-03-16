@@ -10,12 +10,15 @@ Media server entegrasyonları (Jellyfin, Plex vb.) ayrı servisler olarak yazıl
 Bağımsız bir altyazı çeviri API'si. Girdi olarak ses dosyası + altyazı dosyası alır, çevrilmiş altyazı döner.
 
 **Pipeline:**
-1. Ses dosyasından speaker diarization (pyannote) - kim ne zaman konuşuyor
-2. Emotion detection - duygusal ton çıkarma
-3. Mevcut altyazı satırlarıyla eşleştirme (crowd/arka plan filtresi)
-4. TMDB cast bilgileriyle konuşmacı → karakter eşleştirme (opsiyonel, metadata verilirse)
-5. Gemini 2.5 Flash ile context-aware çeviri (karakter kişiliği, duygu, dizi akışı)
-6. ASS/SSA formatında çıktı (karakter renkli stil)
+1. **Diarization** (pyannote) - ses dosyasından speaker segment'leri + speaker embedding'leri çıkar
+   - **TMDB Fetch** (paralel) - metadata verilmişse bölüm cast'i (dizi) veya genel cast (film) çek
+2. **Subtitle Mapping** - altyazı zaman aralıklarına denk gelmeyen segment'leri at (arka plan/crowd/müzik filtresi) + kalan segment'leri altyazı satırlarına ata (tek geçiş, zaman overlap hesabı)
+3. **Overlap Detection** - aynı anda konuşan bölgeleri tespit et ve işaretle
+4. **Emotion Detection** - mapped segment'ler üzerinde duygusal ton çıkar (sadece diyalog sesleri)
+5. **Character ID** (Gemini LLM) - TMDB cast listesi + altyazı içeriği + overlap flag'leri ile speaker → karakter eşleştirmesi. Metadata/TMDB yoksa atlanır, SPEAKER_XX label'ları kalır
+6. **Post-ID Merge** - LLM'in eşleştiremediği speaker'ları embedding cosine similarity ile tanınan karakterlere merge et + mapping label'larını güncelle. Hiçbirine benzemeyen speaker'lar ekstra/arka plan olarak bırakılır
+7. **Translation** (Gemini LLM) - karakter ismi + duygu + context ile batch'li çeviri (50 altyazı/batch, 15s rate limit arası)
+8. **ASS/SSA Output** - karakter bazlı renkli stiller, Rust API tarafında JSON → ASS dönüşümü
 
 ### Entegrasyon Servisleri (Ayrı projeler)
 - **subarr-jellyfin**: Jellyfin'den audio/subtitle çeker, Subarr API'ye gönderir, sonucu Jellyfin'e upload eder

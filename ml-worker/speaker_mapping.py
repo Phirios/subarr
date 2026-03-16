@@ -66,19 +66,39 @@ def map_speakers_to_subtitles(
 
     mapped_subtitles = []
     for entry in srt_entries:
-        best_speaker = None
-        best_overlap = 0.0
+        sub_start = entry["start_ms"] / 1000.0
+
+        # Collect all segments that overlap this subtitle
+        candidates = []
         for seg in segments:
             overlap = compute_overlap(
                 seg["start"], seg["end"],
                 entry["start_ms"], entry["end_ms"],
             )
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_speaker = seg["speaker"]
+            if overlap >= overlap_threshold:
+                candidates.append((seg, overlap))
 
-        speaker = best_speaker if best_overlap >= overlap_threshold else None
-        mapped_subtitles.append({**entry, "speaker": speaker})
+        if not candidates:
+            mapped_subtitles.append({**entry, "speaker": None})
+            continue
+
+        if len(candidates) == 1:
+            best_speaker = candidates[0][0]["speaker"]
+        else:
+            # Multiple segments overlap — if top candidates are close in overlap,
+            # prefer the one starting closest to the subtitle's start time.
+            # This prevents a trailing segment from the previous speaker from winning.
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            top_overlap = candidates[0][1]
+            close = [(seg, ov) for seg, ov in candidates if ov >= top_overlap - 0.15]
+
+            if len(close) > 1:
+                best_seg, _ = min(close, key=lambda x: abs(x[0]["start"] - sub_start))
+                best_speaker = best_seg["speaker"]
+            else:
+                best_speaker = candidates[0][0]["speaker"]
+
+        mapped_subtitles.append({**entry, "speaker": best_speaker})
 
     assigned = sum(1 for s in mapped_subtitles if s["speaker"] is not None)
     speakers = set(s["speaker"] for s in mapped_subtitles if s["speaker"] is not None)

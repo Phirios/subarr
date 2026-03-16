@@ -49,7 +49,7 @@ class Pipeline:
 
         # Step 1: Diarization + TMDB fetch (parallel)
         self._update_status(redis_client, job_id, "diarizing")
-        diarization_result, cast = self._step1_parallel(audio_path, metadata)
+        diarization_result, cast, tmdb_context = self._step1_parallel(audio_path, metadata)
 
         segments = diarization_result["segments"]
         embeddings = diarization_result.get("embeddings")
@@ -70,7 +70,7 @@ class Pipeline:
         if cast:
             self._update_status(redis_client, job_id, "identifying_characters")
             character_names = self.character_identifier.identify(
-                mapped_subtitles, cast, overlap_flags, metadata
+                mapped_subtitles, cast, overlap_flags, metadata, tmdb_context
             )
 
         # Apply character names to mapped_subtitles
@@ -96,6 +96,7 @@ class Pipeline:
             metadata=metadata,
             mapped_subtitles=mapped_subtitles,
             character_map=character_map if character_map else None,
+            tmdb_context=tmdb_context,
         )
 
         # Write output
@@ -106,25 +107,36 @@ class Pipeline:
 
         return {"output_path": output_path}
 
-    def _step1_parallel(self, audio_path: str, metadata: dict | None) -> tuple[dict, list[dict]]:
-        """Run diarization and TMDB fetch in parallel."""
+    def _step1_parallel(self, audio_path: str, metadata: dict | None) -> tuple[dict, list[dict], dict]:
+        """Run diarization, TMDB cast fetch, and TMDB context fetch in parallel."""
         def fetch_cast():
             if not self.tmdb_client or not metadata:
                 return []
             try:
                 return self.tmdb_client.get_characters(metadata)
             except Exception as e:
-                logger.error(f"TMDB fetch failed: {e}")
+                logger.error(f"TMDB cast fetch failed: {e}")
                 return []
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        def fetch_context():
+            if not self.tmdb_client or not metadata:
+                return {}
+            try:
+                return self.tmdb_client.get_context(metadata)
+            except Exception as e:
+                logger.error(f"TMDB context fetch failed: {e}")
+                return {}
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
             diarization_future = executor.submit(self.diarizer.process, audio_path)
             cast_future = executor.submit(fetch_cast)
+            context_future = executor.submit(fetch_context)
 
             diarization_result = diarization_future.result()
             cast = cast_future.result()
+            tmdb_context = context_future.result()
 
-        return diarization_result, cast
+        return diarization_result, cast, tmdb_context
 
     def _update_status(self, redis_client, job_id: str, status: str):
         job = json.loads(redis_client.get(f"job:{job_id}"))
